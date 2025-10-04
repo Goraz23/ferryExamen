@@ -21,19 +21,28 @@ class AforoPage extends StatefulWidget {
 }
 
 class _AforoPageState extends State<AforoPage> {
-  final int topeFerry = 800; 
+  final int topeFerry = 800;
   final TextEditingController capCtrl = TextEditingController(text: '100');
 
   int capacidadIngresada = 100;
   int aforo = 0;
-  bool capacidadBloqueada = false; 
+  bool capacidadBloqueada = false;
   List<String> historial = [];
 
   int get limiteEfectivo =>
       capacidadIngresada > topeFerry ? topeFerry : capacidadIngresada;
 
-  double get porcentaje =>
-      (aforo / limiteEfectivo).clamp(0.0, 1.0);
+  double get porcentaje => (aforo / limiteEfectivo).clamp(0.0, 1.0);
+
+  String _hhmm(DateTime dt) =>
+      '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+
+  void _addHist(String mensaje) {
+    final now = DateTime.now();
+    setState(() {
+      historial.insert(0, '[${_hhmm(now)}] $mensaje');
+    });
+  }
 
   void aplicarCapacidad() {
     final n = int.tryParse(capCtrl.text.trim());
@@ -44,9 +53,9 @@ class _AforoPageState extends State<AforoPage> {
     setState(() {
       capacidadIngresada = n;
       if (aforo > limiteEfectivo) aforo = limiteEfectivo;
-      capacidadBloqueada = true; // 🔒 bloquear edición
-      historial.insert(0, 'Capacidad ingresada: $capacidadIngresada (tope real: $topeFerry)');
+      capacidadBloqueada = true;
     });
+    _addHist('Capacidad ingresada: $capacidadIngresada (tope real: $topeFerry)');
   }
 
   void cambiar(int cantidad) {
@@ -54,25 +63,23 @@ class _AforoPageState extends State<AforoPage> {
       _msg('El aforo ya está en 0');
       return;
     }
-    int nuevo = (aforo + cantidad).clamp(0, limiteEfectivo);
-    
-    if(nuevo == aforo && cantidad > 0) {
+    final nuevo = (aforo + cantidad).clamp(0, limiteEfectivo);
+    if (nuevo == aforo && cantidad > 0) {
       _msg('No se puede superar el límite de $limiteEfectivo');
       return;
     }
-
     setState(() {
       aforo = nuevo;
-      historial.insert(0, 'Cambio de aforo: ${cantidad > 0 ? '+' : ''}$cantidad -> $aforo/$limiteEfectivo');
     });
+    _addHist('Cambio de aforo: ${cantidad > 0 ? '+' : ''}$cantidad -> $aforo/$limiteEfectivo');
   }
 
   void reiniciar() {
     setState(() {
       aforo = 0;
-      capacidadBloqueada = false; 
-      historial.insert(0, 'Reinicio del aforo');
+      capacidadBloqueada = false;
     });
+    _addHist('Reinicio del aforo');
   }
 
   Widget foco(Color color, bool encendido) => Container(
@@ -83,6 +90,42 @@ class _AforoPageState extends State<AforoPage> {
           color: encendido ? color : color.withOpacity(0.25),
         ),
       );
+
+  IconData _iconFor(String s) {
+    if (s.contains('Capacidad ingresada')) return Icons.settings_input_component_rounded;
+    if (s.contains('Reinicio')) return Icons.restart_alt_rounded;
+    if (s.contains('Cambio de aforo')) return Icons.sync_alt_rounded;
+    return Icons.info_outline_rounded;
+  }
+
+  Color _colorFor(String s) {
+    if (s.contains('Capacidad ingresada')) return Colors.blue;
+    if (s.contains('Reinicio')) return Colors.grey;
+    if (s.contains('Cambio de aforo')) {
+      final m = RegExp(r'Cambio de aforo:\s*([+\-]\d+)').firstMatch(s);
+      if (m != null && m.group(1)!.startsWith('+')) return Colors.green;
+      return Colors.orange;
+    }
+    return Colors.blueGrey;
+  }
+
+  ({String time, String text}) _splitTime(String raw) {
+    final m = RegExp(r'^\[(\d{2}:\d{2})\]\s*(.*)$').firstMatch(raw);
+    if (m != null) {
+      return (time: m.group(1)!, text: m.group(2)!);
+    }
+    return (time: '', text: raw);
+  }
+
+  String? _extractPercent(String raw) {
+    final m = RegExp(r'->\s*(\d+)\s*/\s*(\d+)').firstMatch(raw);
+    if (m == null) return null;
+    final cur = int.tryParse(m.group(1)!);
+    final lim = int.tryParse(m.group(2)!);
+    if (cur == null || lim == null || lim == 0) return null;
+    final p = ((cur / lim) * 100).clamp(0, 100);
+    return '$p%';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -95,7 +138,7 @@ class _AforoPageState extends State<AforoPage> {
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          children:[
+          children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: Image.network(
@@ -129,8 +172,6 @@ class _AforoPageState extends State<AforoPage> {
               ],
             ),
             const SizedBox(height: 12),
-
-            // Estado + semáforo
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
@@ -159,8 +200,6 @@ class _AforoPageState extends State<AforoPage> {
               ),
             ),
             const SizedBox(height: 12),
-
-            // Botones
             Wrap(
               spacing: 8,
               children: [
@@ -173,16 +212,56 @@ class _AforoPageState extends State<AforoPage> {
               ],
             ),
             const SizedBox(height: 12),
-
-            // Historial
             Expanded(
               child: historial.isEmpty
                   ? const Center(child: Text('Sin eventos'))
-                  : ListView.builder(
+                  : ListView.separated(
                       itemCount: historial.length,
-                      itemBuilder: (_, i) => ListTile(
-                        title: Text(historial[i]),
-                      ),
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (_, i) {
+                        final raw = historial[i];
+                        final parts = _splitTime(raw);
+                        final color = _colorFor(raw);
+                        final icon = _iconFor(raw);
+                        final percent = _extractPercent(raw);
+
+                        return Card(
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: color.withOpacity(0.25)),
+                          ),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: color.withOpacity(0.12),
+                              foregroundColor: color,
+                              child: Icon(icon),
+                            ),
+                            title: Text(
+                              parts.text,
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: parts.time.isEmpty
+                                ? null
+                                : Text('a las ${parts.time}'),
+                            trailing: percent == null
+                                ? null
+                                : Chip(
+                                    label: Text(percent),
+                                    backgroundColor: color.withOpacity(0.10),
+                                    side: BorderSide(color: color.withOpacity(0.22)),
+                                    labelStyle: TextStyle(
+                                      color: color,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                          ),
+                        );
+                      },
                     ),
             ),
           ],
